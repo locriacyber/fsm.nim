@@ -1,99 +1,30 @@
-import tables, strutils, options
+import tables, options
 
 type
-  Callback = proc(): void
-  StateEvent[S,E] = tuple[state: S, event: E]
-  Transition[S] = tuple[nexState: S, action: Option[Callback]]
+  Callback*[S,R] = proc(_:S): R
+  StateEvent*[S,E] = tuple[state: S, event: E]
+  Transition*[S,R] = tuple[nexState: S, action: Callback[S,R]]
 
-  Machine[S,E] =  ref object of RootObj
-    initialState: S
-    currentState: Option[S]
-    transitions: TableRef[StateEvent[S,E], Transition[S]]
-    transitionsAny: TableRef[S, Transition[S]]
-    defaultTransition: Option[Transition[S]]
+  Machine*[S,E,R] =  object
+    state*: S
+    transitions*: Table[StateEvent[S,E], Transition[S,R]]
 
-  TransitionNotFoundException = object of Exception
+proc addTransition*[S,E,R](m: var Machine[S,E,R], state: S, event: E, nextState: S, action: Callback[S,R]) =
+  m.transitions[(state, event)] = (nextState, action)
 
-proc reset*(m: Machine) =
-  m.currentState = some(m.initialState)
-
-proc setInitialState*[S,E](m: Machine[S,E], state: S) =
-  m.initialState = state
-  if m.currentState.isNone:
-    m.reset()
-
-proc newMachine*[S,E](initialState: S): Machine[S,E] =
-  result = new(Machine[S,E])
-  result.transitions = newTable[StateEvent[S,E], Transition[S]]()
-  result.transitionsAny = newTable[S, Transition[S]]()
-  result.setInitialState(initialState)
-
-proc addTransitionAny*[S,E](m: Machine[S,E], state: S, nextState: S) =
-  m.transitionsAny[state] = (nextState, none(Callback))
-
-proc addTransitionAny*[S,E](m: Machine[S,E], state, nextState: S, action: Callback) =
-  m.transitionsAny[state] = (nextState, some(action))
-
-proc addTransition*[S,E](m: Machine[S,E], state: S, event: E, nextState: S) =
-  m.transitions[(state, event)] = (nextState, none(Callback))
-
-proc addTransition*[S,E](m: Machine[S,E], state: S, event: E, nextState: S, action: Callback) =
-  m.transitions[(state, event)] = (nextState, some(action))
-
-proc setDefaultTransition*[S,E](m: Machine[S,E], state: S) =
-  m.defaultTransition = some((state, none(Callback)))
-
-proc setDefaultTransition*[S,E](m: Machine[S,E], state: S, action: Callback) =
-  m.defaultTransition = some((state, some(action)))
-
-proc getTransition*[S,E](m: Machine[S,E], event: E, state: S): Transition[S] =
+proc getTransition*[S,E,R](m: var Machine[S,E,R], event: E, state: S): Option[Transition[S,R]] =
   let map = (state, event)
   if m.transitions.hasKey(map):
-    result = m.transitions[map]
-  elif m.transitionsAny.hasKey(state):
-    result = m.transitionsAny[state]
-  elif m.defaultTransition.isSome:
-    result = m.defaultTransition.get
-  else: raise newException(TransitionNotFoundException, "Transition is not defined: Event($#) State($#)" % [$event, $state])
+    some(m.transitions[map])
+  else:
+    none(Transition[S,R])
 
-proc getCurrentState*(m: Machine): auto =
-  m.currentState.get
-
-proc process*[S,E](m: Machine[S,E], event: E) =
-  let transition = m.getTransition(event, m.currentState.get)
-  if transition[1].isSome:
-    get(transition[1])()
-  m.currentState = some(transition[0])
-  #echo event, " ", m.currentState.get
-
-
-when isMainModule:
-  proc cb() =
-    echo "i'm evaporating"
-
-  type
-    State = enum
-      SOLID
-      LIQUID
-      GAS
-      PLASMA
-
-    Event = enum
-      MELT
-      EVAPORATE
-      SUBLIMATE
-      IONIZE
-
-  var m = newMachine[State, Event](LIQUID)
-  #m.setDefaultTransition()
-  m.addTransition(SOLID, MELT, LIQUID)
-  m.addTransition(LIQUID, EVAPORATE, GAS, cb)
-  m.addTransition(SOLID, SUBLIMATE, GAS)
-  m.addTransition(GAS, IONIZE, PLASMA)
-  m.addTransition(SOLID, MELT, LIQUID)
-
-  assert m.getCurrentState() == LIQUID
-  m.process(EVAPORATE)
-  assert m.getCurrentState() == GAS
-  m.process(IONIZE)
-  assert m.getCurrentState() == PLASMA
+proc processEvent*[S,E,R](m: var Machine[S,E,R], event: E): Option[R] =
+  let transition = m.getTransition(event, m.state)
+  if transition.isSome:
+    let transition = transition.get
+    let prevState = m.state
+    m.state = transition[0]
+    some(transition[1](prevState))
+  else:
+    none(R)
